@@ -6,6 +6,7 @@ extern "C" {
 
 #include "objimpl.h"
 #include "pymem.h"
+#include "pythread.h"
 
 #ifdef WITH_PYMALLOC
 #include "internal/pymalloc.h"
@@ -155,6 +156,20 @@ struct gc_generation_stats {
     Py_ssize_t uncollectable;
 };
 
+struct gc_mutex {
+    PyThread_type_lock lock;  /* taken when collecting */
+    PyThreadState *owner;  /* whichever thread is currently collecting
+                              (NULL if no collection is taking place) */
+};
+
+struct gc_thread {
+    PyThread_type_lock wakeup; /* acts as an event
+                                  to wake up the GC thread */
+    int collection_requested; /* non-zero if collection requested */
+    PyThread_type_lock done; /* acts as an event signaling
+                                the GC thread has exited */
+};
+
 struct _gc_runtime_state {
     /* List of objects that still need to be cleaned up, singly linked
      * via their gc headers' gc_prev pointers.  */
@@ -185,6 +200,10 @@ struct _gc_runtime_state {
        collections, and are awaiting to undergo a full collection for
        the first time. */
     Py_ssize_t long_lived_pending;
+    /* Support for threaded collection (PEP 556) */
+    int is_threaded;
+    struct gc_mutex mutex;
+    struct gc_thread thread;
 };
 
 PyAPI_FUNC(void) _PyGC_Initialize(struct _gc_runtime_state *);

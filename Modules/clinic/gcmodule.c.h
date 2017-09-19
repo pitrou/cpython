@@ -66,6 +66,54 @@ exit:
     return return_value;
 }
 
+PyDoc_STRVAR(gc_set_mode__doc__,
+"set_mode($module, /, mode)\n"
+"--\n"
+"\n"
+"XXX");
+
+#define GC_SET_MODE_METHODDEF    \
+    {"set_mode", (PyCFunction)gc_set_mode, METH_FASTCALL|METH_KEYWORDS, gc_set_mode__doc__},
+
+static PyObject *
+gc_set_mode_impl(PyObject *module, const char *mode);
+
+static PyObject *
+gc_set_mode(PyObject *module, PyObject **args, Py_ssize_t nargs, PyObject *kwnames)
+{
+    PyObject *return_value = NULL;
+    static const char * const _keywords[] = {"mode", NULL};
+    static _PyArg_Parser _parser = {"s:set_mode", _keywords, 0};
+    const char *mode;
+
+    if (!_PyArg_ParseStackAndKeywords(args, nargs, kwnames, &_parser,
+        &mode)) {
+        goto exit;
+    }
+    return_value = gc_set_mode_impl(module, mode);
+
+exit:
+    return return_value;
+}
+
+PyDoc_STRVAR(gc_get_mode__doc__,
+"get_mode($module, /)\n"
+"--\n"
+"\n"
+"XXX");
+
+#define GC_GET_MODE_METHODDEF    \
+    {"get_mode", (PyCFunction)gc_get_mode, METH_NOARGS, gc_get_mode__doc__},
+
+static PyObject *
+gc_get_mode_impl(PyObject *module);
+
+static PyObject *
+gc_get_mode(PyObject *module, PyObject *Py_UNUSED(ignored))
+{
+    return gc_get_mode_impl(module);
+}
+
 PyDoc_STRVAR(gc_collect__doc__,
 "collect($module, /, generation=2)\n"
 "--\n"
@@ -255,4 +303,4 @@ PyDoc_STRVAR(gc_is_tracked__doc__,
 
 #define GC_IS_TRACKED_METHODDEF    \
     {"is_tracked", (PyCFunction)gc_is_tracked, METH_O, gc_is_tracked__doc__},
-/*[clinic end generated code: output=5a58583f00ab018e input=a9049054013a1b77]*/
+/*[clinic end generated code: output=ba6d3d19b49a6301 input=a9049054013a1b77]*/

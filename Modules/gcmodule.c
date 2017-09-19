@@ -35,6 +35,9 @@ module gc
 [clinic start generated code]*/
 /*[clinic end generated code: output=da39a3ee5e6b4b0d input=b5c9690ecc842d79]*/
 
+
+#define GC _PyRuntime.gc
+
 /* Get an object's GC head */
 #define AS_GC(o) ((PyGC_Head *)(o)-1)
 
@@ -53,7 +56,7 @@ static PyObject *gc_str = NULL;
                 DEBUG_UNCOLLECTABLE | \
                 DEBUG_SAVEALL
 
-#define GEN_HEAD(n) (&_PyRuntime.gc.generations[n].head)
+#define GEN_HEAD(n) (&GC.generations[n].head)
 
 void
 _PyGC_Initialize(struct _gc_runtime_state *state)
@@ -71,6 +74,9 @@ _PyGC_Initialize(struct _gc_runtime_state *state)
         state->generations[i] = generations[i];
     };
     state->generation0 = GEN_HEAD(0);
+    state->mutex.lock = PyThread_allocate_lock();
+    state->thread.wakeup = PyThread_allocate_lock();
+    state->thread.done = PyThread_allocate_lock();
 }
 
 /*--------------------------------------------------------------------------
@@ -651,16 +657,16 @@ handle_legacy_finalizers(PyGC_Head *finalizers, PyGC_Head *old)
 {
     PyGC_Head *gc = finalizers->gc.gc_next;
 
-    if (_PyRuntime.gc.garbage == NULL) {
-        _PyRuntime.gc.garbage = PyList_New(0);
-        if (_PyRuntime.gc.garbage == NULL)
+    if (GC.garbage == NULL) {
+        GC.garbage = PyList_New(0);
+        if (GC.garbage == NULL)
             Py_FatalError("gc couldn't create gc.garbage list");
     }
     for (; gc != finalizers; gc = gc->gc.gc_next) {
         PyObject *op = FROM_GC(gc);
 
-        if ((_PyRuntime.gc.debug & DEBUG_SAVEALL) || has_legacy_finalizer(op)) {
-            if (PyList_Append(_PyRuntime.gc.garbage, op) < 0)
+        if ((GC.debug & DEBUG_SAVEALL) || has_legacy_finalizer(op)) {
+            if (PyList_Append(GC.garbage, op) < 0)
                 return -1;
         }
     }
@@ -750,8 +756,8 @@ delete_garbage(PyGC_Head *collectable, PyGC_Head *old)
         PyGC_Head *gc = collectable->gc.gc_next;
         PyObject *op = FROM_GC(gc);
 
-        if (_PyRuntime.gc.debug & DEBUG_SAVEALL) {
-            PyList_Append(_PyRuntime.gc.garbage, op);
+        if (GC.debug & DEBUG_SAVEALL) {
+            PyList_Append(GC.garbage, op);
         }
         else {
             if ((clear = Py_TYPE(op)->tp_clear) != NULL) {
@@ -804,9 +810,9 @@ collect(int generation, Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
     PyGC_Head *gc;
     _PyTime_t t1 = 0;   /* initialize to prevent a compiler warning */
 
-    struct gc_generation_stats *stats = &_PyRuntime.gc.generation_stats[generation];
+    struct gc_generation_stats *stats = &GC.generation_stats[generation];
 
-    if (_PyRuntime.gc.debug & DEBUG_STATS) {
+    if (GC.debug & DEBUG_STATS) {
         PySys_WriteStderr("gc: collecting generation %d...\n",
                           generation);
         PySys_WriteStderr("gc: objects in each generation:");
@@ -823,9 +829,9 @@ collect(int generation, Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
 
     /* update collection and allocation counters */
     if (generation+1 < NUM_GENERATIONS)
-        _PyRuntime.gc.generations[generation+1].count += 1;
+        GC.generations[generation+1].count += 1;
     for (i = 0; i <= generation; i++)
-        _PyRuntime.gc.generations[i].count = 0;
+        GC.generations[i].count = 0;
 
     /* merge younger generations with one we are currently collecting */
     for (i = 0; i < generation; i++) {
@@ -859,7 +865,7 @@ collect(int generation, Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
     /* Move reachable objects to next generation. */
     if (young != old) {
         if (generation == NUM_GENERATIONS - 2) {
-            _PyRuntime.gc.long_lived_pending += gc_list_size(young);
+            GC.long_lived_pending += gc_list_size(young);
         }
         gc_list_merge(young, old);
     }
@@ -867,8 +873,8 @@ collect(int generation, Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
         /* We only untrack dicts in full collections, to avoid quadratic
            dict build-up. See issue #14775. */
         untrack_dicts(young);
-        _PyRuntime.gc.long_lived_pending = 0;
-        _PyRuntime.gc.long_lived_total = gc_list_size(young);
+        GC.long_lived_pending = 0;
+        GC.long_lived_total = gc_list_size(young);
     }
 
     /* All objects in unreachable are trash, but objects reachable from
@@ -888,7 +894,7 @@ collect(int generation, Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
     for (gc = unreachable.gc.gc_next; gc != &unreachable;
                     gc = gc->gc.gc_next) {
         m++;
-        if (_PyRuntime.gc.debug & DEBUG_COLLECTABLE) {
+        if (GC.debug & DEBUG_COLLECTABLE) {
             debug_cycle("collectable", FROM_GC(gc));
         }
     }
@@ -917,10 +923,10 @@ collect(int generation, Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
          gc != &finalizers;
          gc = gc->gc.gc_next) {
         n++;
-        if (_PyRuntime.gc.debug & DEBUG_UNCOLLECTABLE)
+        if (GC.debug & DEBUG_UNCOLLECTABLE)
             debug_cycle("uncollectable", FROM_GC(gc));
     }
-    if (_PyRuntime.gc.debug & DEBUG_STATS) {
+    if (GC.debug & DEBUG_STATS) {
         _PyTime_t t2 = _PyTime_GetMonotonicClock();
 
         if (m == 0 && n == 0)
@@ -983,11 +989,11 @@ invoke_gc_callback(const char *phase, int generation,
     PyObject *info = NULL;
 
     /* we may get called very early */
-    if (_PyRuntime.gc.callbacks == NULL)
+    if (GC.callbacks == NULL)
         return;
     /* The local variable cannot be rebound, check it for sanity */
-    assert(_PyRuntime.gc.callbacks != NULL && PyList_CheckExact(_PyRuntime.gc.callbacks));
-    if (PyList_GET_SIZE(_PyRuntime.gc.callbacks) != 0) {
+    assert(GC.callbacks != NULL && PyList_CheckExact(GC.callbacks));
+    if (PyList_GET_SIZE(GC.callbacks) != 0) {
         info = Py_BuildValue("{sisnsn}",
             "generation", generation,
             "collected", collected,
@@ -997,8 +1003,8 @@ invoke_gc_callback(const char *phase, int generation,
             return;
         }
     }
-    for (i=0; i<PyList_GET_SIZE(_PyRuntime.gc.callbacks); i++) {
-        PyObject *r, *cb = PyList_GET_ITEM(_PyRuntime.gc.callbacks, i);
+    for (i=0; i<PyList_GET_SIZE(GC.callbacks); i++) {
+        PyObject *r, *cb = PyList_GET_ITEM(GC.callbacks, i);
         Py_INCREF(cb); /* make sure cb doesn't go away */
         r = PyObject_CallFunction(cb, "sO", phase, info);
         Py_XDECREF(r);
@@ -1032,13 +1038,13 @@ collect_generations(void)
      * exceeds the threshold.  Objects in the that generation and
      * generations younger than it will be collected. */
     for (i = NUM_GENERATIONS-1; i >= 0; i--) {
-        if (_PyRuntime.gc.generations[i].count > _PyRuntime.gc.generations[i].threshold) {
+        if (GC.generations[i].count > GC.generations[i].threshold) {
             /* Avoid quadratic performance degradation in number
                of tracked objects. See comments at the beginning
                of this file, and issue #4074.
             */
             if (i == NUM_GENERATIONS - 1
-                && _PyRuntime.gc.long_lived_pending < _PyRuntime.gc.long_lived_total / 4)
+                && GC.long_lived_pending < GC.long_lived_total / 4)
                 continue;
             n = collect_with_callback(i);
             break;
@@ -1046,6 +1052,253 @@ collect_generations(void)
     }
     return n;
 }
+
+Py_LOCAL_INLINE(int)
+is_implicit_gc_desired(void)
+{
+    return (GC.generations[0].count > GC.generations[0].threshold &&
+            GC.enabled &&
+            GC.generations[0].threshold &&
+            !GC.collecting &&
+            !PyErr_Occurred());
+}
+
+/*
+ * Threaded GC support.
+ */
+
+#if 0
+#define GC_DEBUG_PRINTF(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define GC_DEBUG_PRINTF(...)
+#endif
+
+
+#define GC_MUTEX_IS_RECURSIVE(tstate) (tstate == GC.mutex.owner)
+#define GC_MUTEX_ACQUIRE(tstate) do {                               \
+    int __r;                                                        \
+    Py_BEGIN_ALLOW_THREADS                                          \
+    __r = PyThread_acquire_lock(GC.mutex.lock, /* waitflag */ 1);   \
+    assert(__r == PY_LOCK_ACQUIRED);                                \
+    Py_END_ALLOW_THREADS                                            \
+    GC.mutex.owner = tstate;                                        \
+} while(0)
+
+#define GC_MUTEX_RELEASE(tstate) do {                               \
+    assert(GC.mutex.owner == tstate);                               \
+    GC.mutex.owner = NULL;                                          \
+    PyThread_release_lock(GC.mutex.lock);                           \
+} while(0)
+
+static Py_ssize_t
+lock_and_collect(int generation)
+{
+    PyThreadState *me = PyThreadState_GET();
+    Py_ssize_t res;
+
+    if (GC.collecting) {
+        /* Already collecting, do nothing */
+        return 0;
+    }
+    assert(!GC_MUTEX_IS_RECURSIVE(me));
+    GC_MUTEX_ACQUIRE(me);
+
+    GC.collecting = 1;
+    if (generation >= 0) {
+        res = collect_with_callback(generation);
+    }
+    else {
+        res = collect_generations();
+    }
+    GC.collecting = 0;
+
+    GC_MUTEX_RELEASE(me);
+    return res;
+}
+
+static void
+schedule_gc_request(void)
+{
+    assert(GC.is_threaded);
+    if (!GC.thread.collection_requested) {
+//         GC_DEBUG_PRINTF("GC: schedule threaded collection\n");
+        GC.thread.collection_requested = 1;
+        PyThread_release_lock(GC.thread.wakeup);
+        /* Release the GIL immediately to give a chance to the GC thread
+         * (XXX is this too costly?)
+         */
+//         Py_BEGIN_ALLOW_THREADS
+//         Py_END_ALLOW_THREADS
+    }
+}
+
+static void
+gc_thread_func(void *data)
+{
+    PyThreadState *tstate = (PyThreadState *) data;
+    int res;
+    PyObject *threading_module = NULL, *thread_obj = NULL, *func;
+
+    assert(tstate != NULL);
+    /* XXX copied from _threadmodule.c, factor it out? */
+    tstate->thread_id = PyThread_get_thread_ident();
+    _PyThreadState_Init(tstate);
+    PyEval_AcquireThread(tstate);
+    tstate->interp->num_threads++;
+
+    GC_DEBUG_PRINTF("GC: thread start\n");
+
+    /* Create tailored DummyThread instance for this thread */
+    threading_module = PyImport_ImportModule("threading");
+    if (threading_module == NULL) {
+        goto end;
+    }
+    func = PyObject_GetAttrString(threading_module, "_ensure_dummy_thread");
+    if (func == NULL) {
+        goto end;
+    }
+    thread_obj = PyObject_CallFunction(func, "s", "GC thread");
+    Py_DECREF(func);
+    if (thread_obj == NULL) {
+        goto end;
+    }
+
+    /* GC main loop */
+    while (GC.is_threaded) {
+        /* Wait for wakeup */
+        Py_BEGIN_ALLOW_THREADS
+        res = PyThread_acquire_lock(GC.thread.wakeup, /* waitflag */ 1);
+        Py_END_ALLOW_THREADS
+        assert(res == PY_LOCK_ACQUIRED);
+
+//         GC_DEBUG_PRINTF("GC: thread wakeup %d %d\n",
+//                         GC.thread.collection_requested, is_implicit_gc_desired());
+        if (GC.thread.collection_requested) {
+            if (is_implicit_gc_desired()) {
+                lock_and_collect(-1);
+            }
+            /* Avoid cascading requests by resetting the flag *after*
+             * a collection.
+             */
+            GC.thread.collection_requested = 0;
+        }
+    }
+
+end:
+    GC_DEBUG_PRINTF("GC: thread end\n");
+
+    if (thread_obj != NULL) {
+        func = PyObject_GetAttrString(threading_module, "_remove_dummy_thread");
+        if (func != NULL) {
+            PyObject *res = PyObject_CallFunction(func, "O", thread_obj);
+            Py_DECREF(func);
+            Py_XDECREF(res);
+        }
+        Py_DECREF(threading_module);
+        Py_DECREF(thread_obj);
+    }
+
+    if (PyErr_Occurred()) {
+        PySys_WriteStderr("Unhandled exception in GC thread\n");
+        PyErr_WriteUnraisable(NULL);
+    }
+
+    /* Signal we're exiting */
+    PyThread_release_lock(GC.thread.done);
+
+    /* XXX copied from _threadmodule.c, factor it out? */
+    tstate->interp->num_threads--;
+    PyThreadState_Clear(tstate);
+    PyThreadState_DeleteCurrent();
+    PyThread_exit_thread();
+}
+
+int
+_PyGC_SetThreaded(int is_threaded)
+{
+    int res;
+    PyThreadState *me = PyThreadState_GET();
+    int locked = 0;
+
+    if (GC_MUTEX_IS_RECURSIVE(me)) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "recursive call to gc.set_mode() while inside GC");
+        goto error;
+    }
+    GC_MUTEX_ACQUIRE(me);
+    locked = 1;
+
+    if (is_threaded) {
+        PyEval_InitThreads(); /* Start the interpreter's thread-awareness */
+
+        /* set_mode("threaded") */
+        if (!GC.is_threaded) {
+            /* Launch GC thread */
+            PyThreadState *tstate;
+            PyObject *threading_module;
+            unsigned long ident;
+
+            /* bpo-31517: Make sure the first import of the threading
+             * module happens in the main thread (not the GC thread).
+             */
+            threading_module = PyImport_ImportModule("threading");
+            if (threading_module == NULL) {
+                goto error;
+            }
+            Py_DECREF(threading_module);
+
+            /* Preallocate thread state (see _threadmodule.c). */
+            tstate = _PyThreadState_Prealloc(me->interp);
+            if (tstate == NULL) {
+                PyErr_NoMemory();
+                goto error;
+            }
+            res = PyThread_acquire_lock(GC.thread.done, /* waitflag */ 0);
+            assert(res == PY_LOCK_ACQUIRED);
+            GC.is_threaded = 1;
+            ident = PyThread_start_new_thread(gc_thread_func, tstate);
+            if (ident == PYTHREAD_INVALID_THREAD_ID) {
+                PyErr_SetString(PyExc_RuntimeError, "can't start GC thread");
+                PyThreadState_Clear(tstate);
+                GC.is_threaded = 0;
+                PyThread_release_lock(GC.thread.done);
+                goto error;
+            }
+        }
+    }
+    else {
+        /* set_mode("serial") */
+        if (GC.is_threaded) {
+            /* Wake up thread, asking it to end */
+            GC.is_threaded = 0;
+            PyThread_release_lock(GC.thread.wakeup);
+            /* Wait for thread exit */
+            Py_BEGIN_ALLOW_THREADS
+            res = PyThread_acquire_lock(GC.thread.done, /* waitflag */ 1);
+            Py_END_ALLOW_THREADS
+            assert(res == PY_LOCK_ACQUIRED);
+            PyThread_release_lock(GC.thread.done);
+        }
+    }
+    res = 0;
+    goto end;
+
+error:
+    res = -1;
+end:
+    if (locked) {
+        GC_MUTEX_RELEASE(me);
+    }
+    return res;
+}
+
+void
+_PyGC_EnterShutdown(void)
+{
+    GC_DEBUG_PRINTF("GC: _PyGC_EnterShutdown\n");
+    _PyGC_SetThreaded(0);
+}
+
 
 #include "clinic/gcmodule.c.h"
 
@@ -1059,7 +1312,7 @@ static PyObject *
 gc_enable_impl(PyObject *module)
 /*[clinic end generated code: output=45a427e9dce9155c input=81ac4940ca579707]*/
 {
-    _PyRuntime.gc.enabled = 1;
+    GC.enabled = 1;
     Py_RETURN_NONE;
 }
 
@@ -1073,7 +1326,7 @@ static PyObject *
 gc_disable_impl(PyObject *module)
 /*[clinic end generated code: output=97d1030f7aa9d279 input=8c2e5a14e800d83b]*/
 {
-    _PyRuntime.gc.enabled = 0;
+    GC.enabled = 0;
     Py_RETURN_NONE;
 }
 
@@ -1087,8 +1340,57 @@ static int
 gc_isenabled_impl(PyObject *module)
 /*[clinic end generated code: output=1874298331c49130 input=30005e0422373b31]*/
 {
-    return _PyRuntime.gc.enabled;
+    return GC.enabled;
 }
+
+
+/*[clinic input]
+gc.set_mode
+
+    mode: str
+
+XXX
+[clinic start generated code]*/
+
+static PyObject *
+gc_set_mode_impl(PyObject *module, const char *mode)
+/*[clinic end generated code: output=1fa3365c86db951d input=2d4fb995f2aa9ea8]*/
+{
+    int res;
+    if (!strcmp(mode, "serial")) {
+        res = _PyGC_SetThreaded(0);
+    }
+    else if (!strcmp(mode, "threaded")) {
+        res = _PyGC_SetThreaded(1);
+    }
+    else {
+        PyErr_Format(PyExc_ValueError,
+                     "invalid value '%s' for mode "
+                     "(supported values: 'serial', 'threaded')",
+                     mode);
+        res = -1;
+    }
+    if (res == 0)
+        Py_RETURN_NONE;
+    else
+        return NULL;
+}
+
+
+/*[clinic input]
+gc.get_mode
+
+XXX
+[clinic start generated code]*/
+
+static PyObject *
+gc_get_mode_impl(PyObject *module)
+/*[clinic end generated code: output=cf9647462fea862c input=8783022ed713807e]*/
+{
+    return PyUnicode_FromString(
+        GC.is_threaded ? "threaded" : "serial");
+}
+
 
 /*[clinic input]
 gc.collect -> Py_ssize_t
@@ -1108,22 +1410,12 @@ static Py_ssize_t
 gc_collect_impl(PyObject *module, int generation)
 /*[clinic end generated code: output=b697e633043233c7 input=40720128b682d879]*/
 {
-    Py_ssize_t n;
-
     if (generation < 0 || generation >= NUM_GENERATIONS) {
         PyErr_SetString(PyExc_ValueError, "invalid generation");
         return -1;
     }
 
-    if (_PyRuntime.gc.collecting)
-        n = 0; /* already collecting, don't do anything */
-    else {
-        _PyRuntime.gc.collecting = 1;
-        n = collect_with_callback(generation);
-        _PyRuntime.gc.collecting = 0;
-    }
-
-    return n;
+    return lock_and_collect(generation);
 }
 
 /*[clinic input]
@@ -1148,7 +1440,7 @@ static PyObject *
 gc_set_debug_impl(PyObject *module, int flags)
 /*[clinic end generated code: output=7c8366575486b228 input=5e5ce15e84fbed15]*/
 {
-    _PyRuntime.gc.debug = flags;
+    GC.debug = flags;
 
     Py_RETURN_NONE;
 }
@@ -1163,7 +1455,7 @@ static int
 gc_get_debug_impl(PyObject *module)
 /*[clinic end generated code: output=91242f3506cd1e50 input=91a101e1c3b98366]*/
 {
-    return _PyRuntime.gc.debug;
+    return GC.debug;
 }
 
 PyDoc_STRVAR(gc_set_thresh__doc__,
@@ -1177,13 +1469,13 @@ gc_set_thresh(PyObject *self, PyObject *args)
 {
     int i;
     if (!PyArg_ParseTuple(args, "i|ii:set_threshold",
-                          &_PyRuntime.gc.generations[0].threshold,
-                          &_PyRuntime.gc.generations[1].threshold,
-                          &_PyRuntime.gc.generations[2].threshold))
+                          &GC.generations[0].threshold,
+                          &GC.generations[1].threshold,
+                          &GC.generations[2].threshold))
         return NULL;
     for (i = 2; i < NUM_GENERATIONS; i++) {
         /* generations higher than 2 get the same threshold */
-        _PyRuntime.gc.generations[i].threshold = _PyRuntime.gc.generations[2].threshold;
+        GC.generations[i].threshold = GC.generations[2].threshold;
     }
 
     Py_RETURN_NONE;
@@ -1200,9 +1492,9 @@ gc_get_threshold_impl(PyObject *module)
 /*[clinic end generated code: output=7902bc9f41ecbbd8 input=286d79918034d6e6]*/
 {
     return Py_BuildValue("(iii)",
-                         _PyRuntime.gc.generations[0].threshold,
-                         _PyRuntime.gc.generations[1].threshold,
-                         _PyRuntime.gc.generations[2].threshold);
+                         GC.generations[0].threshold,
+                         GC.generations[1].threshold,
+                         GC.generations[2].threshold);
 }
 
 /*[clinic input]
@@ -1216,9 +1508,9 @@ gc_get_count_impl(PyObject *module)
 /*[clinic end generated code: output=354012e67b16398f input=a392794a08251751]*/
 {
     return Py_BuildValue("(iii)",
-                         _PyRuntime.gc.generations[0].count,
-                         _PyRuntime.gc.generations[1].count,
-                         _PyRuntime.gc.generations[2].count);
+                         GC.generations[0].count,
+                         GC.generations[1].count,
+                         GC.generations[2].count);
 }
 
 static int
@@ -1349,7 +1641,7 @@ gc_get_stats_impl(PyObject *module)
     /* To get consistent values despite allocations while constructing
        the result list, we use a snapshot of the running stats. */
     for (i = 0; i < NUM_GENERATIONS; i++) {
-        stats[i] = _PyRuntime.gc.generation_stats[i];
+        stats[i] = GC.generation_stats[i];
     }
 
     result = PyList_New(0);
@@ -1428,6 +1720,8 @@ static PyMethodDef GcMethods[] = {
     GC_ENABLE_METHODDEF
     GC_DISABLE_METHODDEF
     GC_ISENABLED_METHODDEF
+    GC_SET_MODE_METHODDEF
+    GC_GET_MODE_METHODDEF
     GC_SET_DEBUG_METHODDEF
     GC_GET_DEBUG_METHODDEF
     GC_GET_COUNT_METHODDEF
@@ -1466,22 +1760,22 @@ PyInit_gc(void)
     if (m == NULL)
         return NULL;
 
-    if (_PyRuntime.gc.garbage == NULL) {
-        _PyRuntime.gc.garbage = PyList_New(0);
-        if (_PyRuntime.gc.garbage == NULL)
+    if (GC.garbage == NULL) {
+        GC.garbage = PyList_New(0);
+        if (GC.garbage == NULL)
             return NULL;
     }
-    Py_INCREF(_PyRuntime.gc.garbage);
-    if (PyModule_AddObject(m, "garbage", _PyRuntime.gc.garbage) < 0)
+    Py_INCREF(GC.garbage);
+    if (PyModule_AddObject(m, "garbage", GC.garbage) < 0)
         return NULL;
 
-    if (_PyRuntime.gc.callbacks == NULL) {
-        _PyRuntime.gc.callbacks = PyList_New(0);
-        if (_PyRuntime.gc.callbacks == NULL)
+    if (GC.callbacks == NULL) {
+        GC.callbacks = PyList_New(0);
+        if (GC.callbacks == NULL)
             return NULL;
     }
-    Py_INCREF(_PyRuntime.gc.callbacks);
-    if (PyModule_AddObject(m, "callbacks", _PyRuntime.gc.callbacks) < 0)
+    Py_INCREF(GC.callbacks);
+    if (PyModule_AddObject(m, "callbacks", GC.callbacks) < 0)
         return NULL;
 
 #define ADD_INT(NAME) if (PyModule_AddIntConstant(m, #NAME, NAME) < 0) return NULL
@@ -1498,23 +1792,13 @@ PyInit_gc(void)
 Py_ssize_t
 PyGC_Collect(void)
 {
-    Py_ssize_t n;
-
-    if (_PyRuntime.gc.collecting)
-        n = 0; /* already collecting, don't do anything */
-    else {
-        _PyRuntime.gc.collecting = 1;
-        n = collect_with_callback(NUM_GENERATIONS - 1);
-        _PyRuntime.gc.collecting = 0;
-    }
-
-    return n;
+    return lock_and_collect(NUM_GENERATIONS - 1);
 }
 
 Py_ssize_t
 _PyGC_CollectIfEnabled(void)
 {
-    if (!_PyRuntime.gc.enabled)
+    if (!GC.enabled)
         return 0;
 
     return PyGC_Collect();
@@ -1531,12 +1815,12 @@ _PyGC_CollectNoFail(void)
        during interpreter shutdown (and then never finish it).
        See http://bugs.python.org/issue8713#msg195178 for an example.
        */
-    if (_PyRuntime.gc.collecting)
+    if (GC.collecting)
         n = 0;
     else {
-        _PyRuntime.gc.collecting = 1;
+        GC.collecting = 1;
         n = collect(NUM_GENERATIONS - 1, NULL, NULL, 1);
-        _PyRuntime.gc.collecting = 0;
+        GC.collecting = 0;
     }
     return n;
 }
@@ -1544,10 +1828,10 @@ _PyGC_CollectNoFail(void)
 void
 _PyGC_DumpShutdownStats(void)
 {
-    if (!(_PyRuntime.gc.debug & DEBUG_SAVEALL)
-        && _PyRuntime.gc.garbage != NULL && PyList_GET_SIZE(_PyRuntime.gc.garbage) > 0) {
+    if (!(GC.debug & DEBUG_SAVEALL)
+        && GC.garbage != NULL && PyList_GET_SIZE(GC.garbage) > 0) {
         char *message;
-        if (_PyRuntime.gc.debug & DEBUG_UNCOLLECTABLE)
+        if (GC.debug & DEBUG_UNCOLLECTABLE)
             message = "gc: %zd uncollectable objects at " \
                 "shutdown";
         else
@@ -1558,13 +1842,13 @@ _PyGC_DumpShutdownStats(void)
            already. */
         if (PyErr_WarnExplicitFormat(PyExc_ResourceWarning, "gc", 0,
                                      "gc", NULL, message,
-                                     PyList_GET_SIZE(_PyRuntime.gc.garbage)))
+                                     PyList_GET_SIZE(GC.garbage)))
             PyErr_WriteUnraisable(NULL);
-        if (_PyRuntime.gc.debug & DEBUG_UNCOLLECTABLE) {
+        if (GC.debug & DEBUG_UNCOLLECTABLE) {
             PyObject *repr = NULL, *bytes = NULL;
-            repr = PyObject_Repr(_PyRuntime.gc.garbage);
+            repr = PyObject_Repr(GC.garbage);
             if (!repr || !(bytes = PyUnicode_EncodeFSDefault(repr)))
-                PyErr_WriteUnraisable(_PyRuntime.gc.garbage);
+                PyErr_WriteUnraisable(GC.garbage);
             else {
                 PySys_WriteStderr(
                     "      %s\n",
@@ -1580,7 +1864,7 @@ _PyGC_DumpShutdownStats(void)
 void
 _PyGC_Fini(void)
 {
-    Py_CLEAR(_PyRuntime.gc.callbacks);
+    Py_CLEAR(GC.callbacks);
 }
 
 /* for debugging */
@@ -1631,15 +1915,14 @@ _PyObject_GC_Alloc(int use_calloc, size_t basicsize)
         return PyErr_NoMemory();
     g->gc.gc_refs = 0;
     _PyGCHead_SET_REFS(g, GC_UNTRACKED);
-    _PyRuntime.gc.generations[0].count++; /* number of allocated GC objects */
-    if (_PyRuntime.gc.generations[0].count > _PyRuntime.gc.generations[0].threshold &&
-        _PyRuntime.gc.enabled &&
-        _PyRuntime.gc.generations[0].threshold &&
-        !_PyRuntime.gc.collecting &&
-        !PyErr_Occurred()) {
-        _PyRuntime.gc.collecting = 1;
-        collect_generations();
-        _PyRuntime.gc.collecting = 0;
+    GC.generations[0].count++; /* number of allocated GC objects */
+    if (is_implicit_gc_desired()) {
+        if (GC.is_threaded) {
+            schedule_gc_request();
+        }
+        else {
+            lock_and_collect(-1);
+        }
     }
     op = FROM_GC(g);
     return op;
@@ -1704,8 +1987,8 @@ PyObject_GC_Del(void *op)
     PyGC_Head *g = AS_GC(op);
     if (IS_TRACKED(op))
         gc_list_remove(g);
-    if (_PyRuntime.gc.generations[0].count > 0) {
-        _PyRuntime.gc.generations[0].count--;
+    if (GC.generations[0].count > 0) {
+        GC.generations[0].count--;
     }
     PyObject_FREE(g);
 }

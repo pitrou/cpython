@@ -1182,8 +1182,8 @@ class _MainThread(Thread):
 
 class _DummyThread(Thread):
 
-    def __init__(self):
-        Thread.__init__(self, name=_newname("Dummy-%d"), daemon=True)
+    def __init__(self, name):
+        Thread.__init__(self, name=name, daemon=True)
 
         self._started.set()
         self._set_ident()
@@ -1201,6 +1201,18 @@ class _DummyThread(Thread):
         assert False, "cannot join a dummy thread"
 
 
+# Internal API for background threads created by the interpreter
+
+def _ensure_dummy_thread(name):
+    assert get_ident() not in _active, (get_ident(), _active)
+    assert isinstance(name, str)
+    return _DummyThread(name)
+
+def _remove_dummy_thread(thread):
+    assert isinstance(thread, _DummyThread)
+    del _active[thread.ident]
+
+
 # Global API functions
 
 def current_thread():
@@ -1213,7 +1225,7 @@ def current_thread():
     try:
         return _active[get_ident()]
     except KeyError:
-        return _DummyThread()
+        return _DummyThread(name=_newname("Dummy-%d"))
 
 currentThread = current_thread
 
@@ -1250,6 +1262,7 @@ from _thread import stack_size
 # and make it available for the interpreter
 # (Py_Main) as threading._shutdown.
 
+# XXX this is fragile: what if "threading" is first imported from a dummy thread?
 _main_thread = _MainThread()
 
 def _shutdown():

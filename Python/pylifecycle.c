@@ -837,6 +837,11 @@ int _Py_InitializeMainInterpreter(const _PyMainInterpreterConfig *config)
         Py_XDECREF(warnings_module);
     }
 
+    /* XXX allow setting GC mode with an env var? */
+    if (_PyGC_SetThreaded(0)) {
+        Py_FatalError("_PyGC_SetThreaded failed");
+    }
+
     _PyRuntime.initialized = 1;
 
     if (!Py_NoSiteFlag)
@@ -968,6 +973,9 @@ Py_FinalizeEx(void)
      * the threads created via Threading.
      */
     call_py_exitfuncs();
+
+    /* */
+    _PyGC_EnterShutdown();
 
     /* Get current thread state and interpreter pointer */
     tstate = PyThreadState_GET();
