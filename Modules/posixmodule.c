@@ -439,6 +439,7 @@ PyOS_BeforeFork(void)
 {
     run_at_forkers(PyThreadState_Get()->interp->before_forkers, 1);
 
+    _PyGC_BeforeFork();
     _PyImport_AcquireLock();
 }
 
@@ -447,6 +448,8 @@ PyOS_AfterFork_Parent(void)
 {
     if (_PyImport_ReleaseLock() <= 0)
         Py_FatalError("failed releasing import lock after fork");
+
+    _PyGC_AfterFork_Parent();
 
     run_at_forkers(PyThreadState_Get()->interp->after_forkers_parent, 0);
 }
@@ -461,6 +464,7 @@ PyOS_AfterFork_Child(void)
     PyEval_ReInitThreads();
     _PyImport_ReInitLock();
     _PySignal_AfterFork();
+    _PyGC_AfterFork_Child();
 
     run_at_forkers(PyThreadState_Get()->interp->after_forkers_child, 0);
 }

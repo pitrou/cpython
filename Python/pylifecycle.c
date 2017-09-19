@@ -961,6 +961,7 @@ Py_FinalizeEx(void)
     if (!_PyRuntime.initialized)
         return status;
 
+    fprintf(stderr, "Py_Finalize 1\n");
     wait_for_thread_shutdown();
 
     /* The interpreter is still entirely intact at this point, and the
@@ -972,12 +973,15 @@ Py_FinalizeEx(void)
      * threads created thru it, so this also protects pending imports in
      * the threads created via Threading.
      */
+    fprintf(stderr, "Py_Finalize 2\n");
     call_py_exitfuncs();
 
     /* */
+    fprintf(stderr, "Py_Finalize 3\n");
     _PyGC_EnterShutdown();
 
     /* Get current thread state and interpreter pointer */
+    fprintf(stderr, "Py_Finalize 4\n");
     tstate = PyThreadState_GET();
     interp = tstate->interp;
 

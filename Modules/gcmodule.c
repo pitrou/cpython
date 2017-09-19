@@ -1067,7 +1067,7 @@ is_implicit_gc_desired(void)
  * Threaded GC support.
  */
 
-#if 0
+#if 1
 #define GC_DEBUG_PRINTF(...) fprintf(stderr, __VA_ARGS__)
 #else
 #define GC_DEBUG_PRINTF(...)
@@ -1096,22 +1096,22 @@ lock_and_collect(int generation)
     PyThreadState *me = PyThreadState_GET();
     Py_ssize_t res;
 
-    if (GC.collecting) {
-        /* Already collecting, do nothing */
+    if (GC_MUTEX_IS_RECURSIVE(me)) {
+        /* Recursive call, do nothing */
         return 0;
     }
-    assert(!GC_MUTEX_IS_RECURSIVE(me));
     GC_MUTEX_ACQUIRE(me);
-
+    assert(!GC.collecting);
     GC.collecting = 1;
+
     if (generation >= 0) {
         res = collect_with_callback(generation);
     }
     else {
         res = collect_generations();
     }
-    GC.collecting = 0;
 
+    GC.collecting = 0;
     GC_MUTEX_RELEASE(me);
     return res;
 }
@@ -1149,19 +1149,19 @@ gc_thread_func(void *data)
     GC_DEBUG_PRINTF("GC: thread start\n");
 
     /* Create tailored DummyThread instance for this thread */
-    threading_module = PyImport_ImportModule("threading");
-    if (threading_module == NULL) {
-        goto end;
-    }
-    func = PyObject_GetAttrString(threading_module, "_ensure_dummy_thread");
-    if (func == NULL) {
-        goto end;
-    }
-    thread_obj = PyObject_CallFunction(func, "s", "GC thread");
-    Py_DECREF(func);
-    if (thread_obj == NULL) {
-        goto end;
-    }
+//     threading_module = PyImport_ImportModule("threading");
+//     if (threading_module == NULL) {
+//         goto end;
+//     }
+//     func = PyObject_GetAttrString(threading_module, "_ensure_dummy_thread");
+//     if (func == NULL) {
+//         goto end;
+//     }
+//     thread_obj = PyObject_CallFunction(func, "s", "GC thread");
+//     Py_DECREF(func);
+//     if (thread_obj == NULL) {
+//         goto end;
+//     }
 
     /* GC main loop */
     while (GC.is_threaded) {
@@ -1171,8 +1171,8 @@ gc_thread_func(void *data)
         Py_END_ALLOW_THREADS
         assert(res == PY_LOCK_ACQUIRED);
 
-//         GC_DEBUG_PRINTF("GC: thread wakeup %d %d\n",
-//                         GC.thread.collection_requested, is_implicit_gc_desired());
+        GC_DEBUG_PRINTF("GC: thread wakeup %d %d\n",
+                        GC.thread.collection_requested, is_implicit_gc_desired());
         if (GC.thread.collection_requested) {
             if (is_implicit_gc_desired()) {
                 lock_and_collect(-1);
@@ -1187,16 +1187,16 @@ gc_thread_func(void *data)
 end:
     GC_DEBUG_PRINTF("GC: thread end\n");
 
-    if (thread_obj != NULL) {
-        func = PyObject_GetAttrString(threading_module, "_remove_dummy_thread");
-        if (func != NULL) {
-            PyObject *res = PyObject_CallFunction(func, "O", thread_obj);
-            Py_DECREF(func);
-            Py_XDECREF(res);
-        }
-        Py_DECREF(threading_module);
-        Py_DECREF(thread_obj);
-    }
+//     if (thread_obj != NULL) {
+//         func = PyObject_GetAttrString(threading_module, "_remove_dummy_thread");
+//         if (func != NULL) {
+//             PyObject *res = PyObject_CallFunction(func, "O", thread_obj);
+//             Py_DECREF(func);
+//             Py_XDECREF(res);
+//         }
+//         Py_DECREF(threading_module);
+//         Py_DECREF(thread_obj);
+//     }
 
     if (PyErr_Occurred()) {
         PySys_WriteStderr("Unhandled exception in GC thread\n");
@@ -1218,20 +1218,25 @@ _PyGC_SetThreaded(int is_threaded)
 {
     int res;
     PyThreadState *me = PyThreadState_GET();
-    int locked = 0;
+    static int reentrant = 0;
 
-    if (GC_MUTEX_IS_RECURSIVE(me)) {
-        PyErr_SetString(PyExc_RuntimeError,
-                        "recursive call to gc.set_mode() while inside GC");
-        goto error;
+    /*
+     * Problems with importing threading:
+     * - bpo-31517
+     * - the threading state needs sanitizing after fork, but comes
+     *   after the _PyGC_AfterFork_Child() -- i.e. when it's too late
+     */
+
+    if (reentrant++) {
+        /* Ignore reentrant or concurrent calls to this function */
+        /* XXX lock this function with GC.mutex instead? */
+        goto success;
     }
-    GC_MUTEX_ACQUIRE(me);
-    locked = 1;
 
     if (is_threaded) {
+        /* set_mode("threaded") */
         PyEval_InitThreads(); /* Start the interpreter's thread-awareness */
 
-        /* set_mode("threaded") */
         if (!GC.is_threaded) {
             /* Launch GC thread */
             PyThreadState *tstate;
@@ -1241,11 +1246,11 @@ _PyGC_SetThreaded(int is_threaded)
             /* bpo-31517: Make sure the first import of the threading
              * module happens in the main thread (not the GC thread).
              */
-            threading_module = PyImport_ImportModule("threading");
-            if (threading_module == NULL) {
-                goto error;
-            }
-            Py_DECREF(threading_module);
+//             threading_module = PyImport_ImportModule("threading");
+//             if (threading_module == NULL) {
+//                 goto error;
+//             }
+//             Py_DECREF(threading_module);
 
             /* Preallocate thread state (see _threadmodule.c). */
             tstate = _PyThreadState_Prealloc(me->interp);
@@ -1258,10 +1263,10 @@ _PyGC_SetThreaded(int is_threaded)
             GC.is_threaded = 1;
             ident = PyThread_start_new_thread(gc_thread_func, tstate);
             if (ident == PYTHREAD_INVALID_THREAD_ID) {
-                PyErr_SetString(PyExc_RuntimeError, "can't start GC thread");
                 PyThreadState_Clear(tstate);
                 GC.is_threaded = 0;
                 PyThread_release_lock(GC.thread.done);
+                PyErr_SetString(PyExc_RuntimeError, "can't start GC thread");
                 goto error;
             }
         }
@@ -1280,15 +1285,14 @@ _PyGC_SetThreaded(int is_threaded)
             PyThread_release_lock(GC.thread.done);
         }
     }
+
+success:
     res = 0;
     goto end;
-
 error:
     res = -1;
 end:
-    if (locked) {
-        GC_MUTEX_RELEASE(me);
-    }
+    reentrant--;
     return res;
 }
 
@@ -1296,7 +1300,47 @@ void
 _PyGC_EnterShutdown(void)
 {
     GC_DEBUG_PRINTF("GC: _PyGC_EnterShutdown\n");
-    _PyGC_SetThreaded(0);
+    if (_PyGC_SetThreaded(0)) {
+        Py_FatalError("should not have failed setting GC mode to serial");
+    }
+    /* XXX remove those asserts because of daemon threads */
+    assert(!GC.collecting);
+    assert(GC.mutex.owner == NULL);
+}
+
+// static int before_fork_is_threaded;
+
+void
+_PyGC_BeforeFork(void)
+{
+    PyThreadState *me = PyThreadState_GET();
+    if (GC_MUTEX_IS_RECURSIVE(me)) {
+        Py_FatalError("fork() called from within GC");
+    }
+    GC_MUTEX_ACQUIRE(me);
+    assert(!GC.collecting);
+}
+
+void
+_PyGC_AfterFork_Parent(void)
+{
+    PyThreadState *me = PyThreadState_GET();
+    GC_MUTEX_RELEASE(me);
+}
+
+void
+_PyGC_AfterFork_Child(void)
+{
+    PyThreadState *me = PyThreadState_GET();
+    GC.mutex.lock = PyThread_allocate_lock();
+    GC.mutex.owner = NULL;
+    GC.thread.wakeup = PyThread_allocate_lock();
+    GC.thread.done = PyThread_allocate_lock();
+    if (GC.is_threaded) {
+        /* Restart thread */
+        GC.is_threaded = 0;
+        _PyGC_SetThreaded(1);
+    }
 }
 
 
@@ -1792,6 +1836,7 @@ PyInit_gc(void)
 Py_ssize_t
 PyGC_Collect(void)
 {
+    GC_DEBUG_PRINTF("GC: PyGC_Collect\n");
     return lock_and_collect(NUM_GENERATIONS - 1);
 }
 
@@ -1819,6 +1864,7 @@ _PyGC_CollectNoFail(void)
         n = 0;
     else {
         GC.collecting = 1;
+        GC_DEBUG_PRINTF("GC: _PyGC_CollectNoFail\n");
         n = collect(NUM_GENERATIONS - 1, NULL, NULL, 1);
         GC.collecting = 0;
     }
@@ -1828,6 +1874,8 @@ _PyGC_CollectNoFail(void)
 void
 _PyGC_DumpShutdownStats(void)
 {
+    GC_DEBUG_PRINTF("_PyGC_DumpShutdownStats: GC.debug = %d, len(gc.garbage) = %zd\n",
+                    GC.debug, GC.garbage == NULL ? 0 : PyList_GET_SIZE(GC.garbage));
     if (!(GC.debug & DEBUG_SAVEALL)
         && GC.garbage != NULL && PyList_GET_SIZE(GC.garbage) > 0) {
         char *message;

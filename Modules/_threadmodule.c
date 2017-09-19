@@ -1009,6 +1009,8 @@ t_bootstrap(void *boot_raw)
     }
     else
         Py_DECREF(res);
+
+    fprintf(stderr, "[t_bootstrap] finishing %ld\n", tstate->thread_id);
     Py_DECREF(boot->func);
     Py_DECREF(boot->args);
     Py_XDECREF(boot->keyw);
@@ -1016,6 +1018,7 @@ t_bootstrap(void *boot_raw)
     tstate->interp->num_threads--;
     PyThreadState_Clear(tstate);
     PyThreadState_DeleteCurrent();
+    fprintf(stderr, "[t_bootstrap] finished\n");
     PyThread_exit_thread();
 }
 
@@ -1180,6 +1183,7 @@ release_sentinel(void *wr)
         assert(Py_TYPE(obj) == &Locktype);
         lock = (lockobject *) obj;
         if (lock->locked) {
+            fprintf(stderr, "release_sentinel %p alive=%d\n", obj, obj != Py_None);
             PyThread_release_lock(lock->lock_lock);
             lock->locked = 0;
         }

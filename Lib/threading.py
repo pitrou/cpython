@@ -898,6 +898,7 @@ class Thread:
         """
         self._tstate_lock = _set_sentinel()
         self._tstate_lock.acquire()
+        print("_set_tstate_lock(%r) -> 0x%x" % (self, id(self._tstate_lock)))
 
     def _bootstrap_inner(self):
         try:
@@ -985,6 +986,7 @@ class Thread:
         lock = self._tstate_lock
         if lock is not None:
             assert not lock.locked()
+        print("[Thread._stop]", self._ident)
         self._is_stopped = True
         self._tstate_lock = None
 
@@ -1028,12 +1030,15 @@ class Thread:
         if self is current_thread():
             raise RuntimeError("cannot join current thread")
 
+        r = id(self._tstate_lock)
+        print("[Thread.join %d] wait for lock 0x%x" % (_os.getpid(), r))
         if timeout is None:
             self._wait_for_tstate_lock()
         else:
             # the behavior of a negative timeout isn't documented, but
             # historically .join(timeout=x) for x<0 has acted as if timeout=0
             self._wait_for_tstate_lock(timeout=max(timeout, 0))
+        print("/[Thread.join %d] wait for lock 0x%x" % (_os.getpid(), r))
 
     def _wait_for_tstate_lock(self, block=True, timeout=-1):
         # Issue #18808: wait for the thread state to be gone.
@@ -1262,7 +1267,6 @@ from _thread import stack_size
 # and make it available for the interpreter
 # (Py_Main) as threading._shutdown.
 
-# XXX this is fragile: what if "threading" is first imported from a dummy thread?
 _main_thread = _MainThread()
 
 def _shutdown():
@@ -1283,8 +1287,13 @@ def _shutdown():
     _main_thread._stop()
     t = _pickSomeNonDaemonThread()
     while t:
-        t.join()
+        print("[threading._shutdown %d] picked %s" % (_os.getpid(), t,))
+        while t.is_alive():
+            t.join(timeout=1)
+            print("... [threading._shutdown %d] still trying to join %s" % (_os.getpid(), t,))
+        print("[threading._shutdown %d] joined %s" % (_os.getpid(), t,))
         t = _pickSomeNonDaemonThread()
+    print("[threading._shutdown %d] ok" % (_os.getpid(), ))
     _main_thread._delete()
 
 def _pickSomeNonDaemonThread():
