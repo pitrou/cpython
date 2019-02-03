@@ -37,11 +37,7 @@ module gc
 [clinic start generated code]*/
 /*[clinic end generated code: output=da39a3ee5e6b4b0d input=b5c9690ecc842d79]*/
 
-// <<<<<<< HEAD
-
 #define GC _PyRuntime.gc
-
-// =======
 
 #define GC_DEBUG (0)  /* Enable more asserts */
 
@@ -68,7 +64,6 @@ module gc
 // Between them, unreachable list is not normal list and we can not use
 // most gc_list_* functions for it.
 #define NEXT_MASK_UNREACHABLE  (1)
-// >>>>>>> master
 
 /* Get an object's GC head */
 #define AS_GC(o) ((PyGC_Head *)(o)-1)
@@ -998,7 +993,7 @@ collect(int generation, Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
             PySys_FormatStderr(" %zd",
                               gc_list_size(GEN_HEAD(i)));
         PySys_WriteStderr("\ngc: objects in permanent generation: %zd",
-                         gc_list_size(&_PyRuntime.gc.permanent_generation.head));
+                         gc_list_size(&GC.permanent_generation.head));
         t1 = _PyTime_GetMonotonicClock();
 
         PySys_WriteStderr("\n");
@@ -1184,7 +1179,7 @@ invoke_gc_callback(const char *phase, int generation,
         return;
     /* The local variable cannot be rebound, check it for sanity */
     assert(PyList_CheckExact(GC.callbacks));
-    if (PyList_GET_SIZE(GC.gc.callbacks) != 0) {
+    if (PyList_GET_SIZE(GC.callbacks) != 0) {
         info = Py_BuildValue("{sisnsn}",
             "generation", generation,
             "collected", collected,
@@ -1955,8 +1950,8 @@ gc_freeze_impl(PyObject *module)
 /*[clinic end generated code: output=502159d9cdc4c139 input=b602b16ac5febbe5]*/
 {
     for (int i = 0; i < NUM_GENERATIONS; ++i) {
-        gc_list_merge(GEN_HEAD(i), &_PyRuntime.gc.permanent_generation.head);
-        _PyRuntime.gc.generations[i].count = 0;
+        gc_list_merge(GEN_HEAD(i), &GC.permanent_generation.head);
+        GC.generations[i].count = 0;
     }
     Py_RETURN_NONE;
 }
@@ -1973,7 +1968,7 @@ static PyObject *
 gc_unfreeze_impl(PyObject *module)
 /*[clinic end generated code: output=1c15f2043b25e169 input=2dd52b170f4cef6c]*/
 {
-    gc_list_merge(&_PyRuntime.gc.permanent_generation.head, GEN_HEAD(NUM_GENERATIONS-1));
+    gc_list_merge(&GC.permanent_generation.head, GEN_HEAD(NUM_GENERATIONS-1));
     Py_RETURN_NONE;
 }
 
@@ -1987,7 +1982,7 @@ static Py_ssize_t
 gc_get_freeze_count_impl(PyObject *module)
 /*[clinic end generated code: output=61cbd9f43aa032e1 input=45ffbc65cfe2a6ed]*/
 {
-    return gc_list_size(&_PyRuntime.gc.permanent_generation.head);
+    return gc_list_size(&GC.permanent_generation.head);
 }
 
 
@@ -2091,7 +2086,6 @@ PyInit_gc(void)
 Py_ssize_t
 PyGC_Collect(void)
 {
-// <<<<<<< HEAD
     GC_DEBUG_PRINTF("GC: PyGC_Collect\n");
 
     PyObject *exc, *value, *tb;
@@ -2099,22 +2093,6 @@ PyGC_Collect(void)
     Py_ssize_t n = lock_and_collect(NUM_GENERATIONS - 1);
     PyErr_Restore(exc, value, tb);
     return n;
-// =======
-//     Py_ssize_t n;
-//
-//     if (_PyRuntime.gc.collecting)
-//         n = 0; /* already collecting, don't do anything */
-//     else {
-//         PyObject *exc, *value, *tb;
-//         _PyRuntime.gc.collecting = 1;
-//         PyErr_Fetch(&exc, &value, &tb);
-//         n = collect_with_callback(NUM_GENERATIONS - 1);
-//         PyErr_Restore(exc, value, tb);
-//         _PyRuntime.gc.collecting = 0;
-//     }
-//
-//     return n;
-// >>>>>>> master
 }
 
 Py_ssize_t
@@ -2152,21 +2130,12 @@ _PyGC_CollectNoFail(void)
 void
 _PyGC_DumpShutdownStats(void)
 {
-// <<<<<<< HEAD
-//     GC_DEBUG_PRINTF("_PyGC_DumpShutdownStats: GC.debug = %d, len(gc.garbage) = %zd\n",
-//                     GC.debug, GC.garbage == NULL ? 0 : PyList_GET_SIZE(GC.garbage));
-//     if (!(GC.debug & DEBUG_SAVEALL)
-//         && GC.garbage != NULL && PyList_GET_SIZE(GC.garbage) > 0) {
-//         char *message;
-//         if (GC.debug & DEBUG_UNCOLLECTABLE)
-// =======
     GC_DEBUG_PRINTF("_PyGC_DumpShutdownStats: GC.debug = %d, len(gc.garbage) = %zd\n",
                     GC.debug, GC.garbage == NULL ? 0 : PyList_GET_SIZE(GC.garbage));
     if (!(GC.debug & DEBUG_SAVEALL)
         && GC.garbage != NULL && PyList_GET_SIZE(GC.garbage) > 0) {
         const char *message;
         if (GC.debug & DEBUG_UNCOLLECTABLE)
-// >>>>>>> master
             message = "gc: %zd uncollectable objects at " \
                 "shutdown";
         else
@@ -2256,9 +2225,6 @@ _PyObject_GC_Alloc(int use_calloc, size_t basicsize)
     assert(((uintptr_t)g & 3) == 0);  // g must be aligned 4bytes boundary
     g->_gc_next = 0;
     g->_gc_prev = 0;
-// <<<<<<< HEAD
-    g->gc.gc_refs = 0;
-    _PyGCHead_SET_REFS(g, GC_UNTRACKED);
     GC.generations[0].count++; /* number of allocated GC objects */
     if (is_implicit_gc_desired()) {
         if (GC.is_threaded) {
@@ -2267,20 +2233,6 @@ _PyObject_GC_Alloc(int use_calloc, size_t basicsize)
         else {
             lock_and_collect(-1);
         }
-// =======
-//     assert(((uintptr_t)g & 3) == 0);  // g must be aligned 4bytes boundary
-//     g->_gc_next = 0;
-//     g->_gc_prev = 0;
-//     _PyRuntime.gc.generations[0].count++; /* number of allocated GC objects */
-//     if (_PyRuntime.gc.generations[0].count > _PyRuntime.gc.generations[0].threshold &&
-//         _PyRuntime.gc.enabled &&
-//         _PyRuntime.gc.generations[0].threshold &&
-//         !_PyRuntime.gc.collecting &&
-//         !PyErr_Occurred()) {
-//         _PyRuntime.gc.collecting = 1;
-//         collect_generations();
-//         _PyRuntime.gc.collecting = 0;
-// >>>>>>> master
     }
     op = FROM_GC(g);
     return op;
@@ -2348,6 +2300,7 @@ PyObject_GC_Del(void *op)
     PyGC_Head *g = AS_GC(op);
     if (_PyObject_GC_IS_TRACKED(op)) {
         gc_list_remove(g);
+    }
     if (GC.generations[0].count > 0) {
         GC.generations[0].count--;
     }

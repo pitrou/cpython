@@ -644,6 +644,8 @@ class GCTests(unittest.TestCase):
         code = """if 1:
             import gc
             import _testcapi
+            import threading; del threading
+
             @_testcapi.with_tp_del
             class X:
                 def __init__(self, name):
@@ -1021,7 +1023,7 @@ class GCTogglingTests(unittest.TestCase):
             i += 1
             if i > N:
                 self.fail(f"gc didn't happen after {N} iterations")
-            #self.assertEqual(len(ouch), 0)
+            self.assertEqual(len(ouch), 0)
             junk.append([])  # this will eventually trigger gc
 
         self.assertEqual(len(ouch), 1)  # else the callback wasn't invoked
@@ -1089,7 +1091,7 @@ class GCTogglingTests(unittest.TestCase):
             i += 1
             if i > N:
                 self.fail(f"gc didn't happen after {N} iterations")
-            #self.assertEqual(len(ouch), 0)
+            self.assertEqual(len(ouch), 0)
             junk.append([])  # this will eventually trigger gc
 
         self.assertEqual(len(ouch), 1)  # else __del__ wasn't invoked

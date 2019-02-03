@@ -1030,7 +1030,7 @@ class Thread:
         if self is current_thread():
             raise RuntimeError("cannot join current thread")
 
-        r = id(self._tstate_lock)
+        #r = id(self._tstate_lock)
         #print("[Thread.join %d] wait for lock 0x%x" % (_os.getpid(), r))
         if timeout is None:
             self._wait_for_tstate_lock()
@@ -1294,7 +1294,6 @@ def _shutdown():
         #print("[threading._shutdown %d] joined %s" % (_os.getpid(), t,))
         t = _pickSomeNonDaemonThread()
     #print("[threading._shutdown %d] ok" % (_os.getpid(), ))
-    #_main_thread._delete()
 
 def _pickSomeNonDaemonThread():
     for t in enumerate():
