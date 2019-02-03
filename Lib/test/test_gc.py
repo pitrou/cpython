@@ -644,7 +644,6 @@ class GCTests(unittest.TestCase):
         code = """if 1:
             import gc
             import _testcapi
-            import threading; del threading
 
             @_testcapi.with_tp_del
             class X:

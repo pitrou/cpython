@@ -1643,11 +1643,6 @@ get_target_path(HANDLE hdl, wchar_t **target_path)
         return FALSE;
     }
 
-    if(!CloseHandle(hdl)) {
-        PyMem_RawFree(buf);
-        return FALSE;
-    }
-
     buf[result_length] = 0;
 
     *target_path = buf;
@@ -1705,9 +1700,10 @@ win32_xstat_impl(const wchar_t *path, struct _Py_stat_struct *result,
             return -1;
         }
         if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
-            if (!win32_get_reparse_tag(hFile, &reparse_tag))
+            if (!win32_get_reparse_tag(hFile, &reparse_tag)) {
+                CloseHandle(hFile);
                 return -1;
-
+            }
             /* Close the outer open file handle now that we're about to
                reopen it with different flags. */
             if (!CloseHandle(hFile))
@@ -1724,8 +1720,14 @@ win32_xstat_impl(const wchar_t *path, struct _Py_stat_struct *result,
                 if (hFile2 == INVALID_HANDLE_VALUE)
                     return -1;
 
-                if (!get_target_path(hFile2, &target_path))
+                if (!get_target_path(hFile2, &target_path)) {
+                    CloseHandle(hFile2);
                     return -1;
+                }
+
+                if (!CloseHandle(hFile2)) {
+                    return -1;
+                }
 
                 code = win32_xstat_impl(target_path, result, FALSE);
                 PyMem_RawFree(target_path);
@@ -5169,7 +5171,8 @@ convert_sched_param(PyObject *param, struct sched_param *res);
 #endif
 
 static int
-parse_posix_spawn_flags(PyObject *setpgroup, int resetids, PyObject *setsigmask,
+parse_posix_spawn_flags(const char *func_name, PyObject *setpgroup,
+                        int resetids, int setsid, PyObject *setsigmask,
                         PyObject *setsigdef, PyObject *scheduler,
                         posix_spawnattr_t *attrp)
 {
@@ -5196,6 +5199,17 @@ parse_posix_spawn_flags(PyObject *setpgroup, int resetids, PyObject *setsigmask,
 
     if (resetids) {
         all_flags |= POSIX_SPAWN_RESETIDS;
+    }
+
+    if (setsid) {
+#ifdef POSIX_SPAWN_SETSID
+        all_flags |= POSIX_SPAWN_SETSID;
+#elif defined(POSIX_SPAWN_SETSID_NP)
+        all_flags |= POSIX_SPAWN_SETSID_NP;
+#else
+        argument_unavailable_error(func_name, "setsid");
+        return -1;
+#endif
     }
 
    if (setsigmask) {
@@ -5384,40 +5398,14 @@ fail:
     return -1;
 }
 
-/*[clinic input]
-
-os.posix_spawn
-    path: path_t
-        Path of executable file.
-    argv: object
-        Tuple or list of strings.
-    env: object
-        Dictionary of strings mapping to strings.
-    /
-    *
-    file_actions: object(c_default='NULL') = ()
-        A sequence of file action tuples.
-    setpgroup: object = NULL
-        The pgroup to use with the POSIX_SPAWN_SETPGROUP flag.
-    resetids: bool(accept={int}) = False
-        If the value is `True` the POSIX_SPAWN_RESETIDS will be activated.
-    setsigmask: object(c_default='NULL') = ()
-        The sigmask to use with the POSIX_SPAWN_SETSIGMASK flag.
-    setsigdef: object(c_default='NULL') = ()
-        The sigmask to use with the POSIX_SPAWN_SETSIGDEF flag.
-    scheduler: object = NULL
-        A tuple with the scheduler policy (optional) and parameters.
-
-Execute the program specified by path in a new process.
-[clinic start generated code]*/
 
 static PyObject *
-os_posix_spawn_impl(PyObject *module, path_t *path, PyObject *argv,
-                    PyObject *env, PyObject *file_actions,
-                    PyObject *setpgroup, int resetids, PyObject *setsigmask,
-                    PyObject *setsigdef, PyObject *scheduler)
-/*[clinic end generated code: output=45dfa4c515d09f2c input=2891c2f1d457e39b]*/
+py_posix_spawn(int use_posix_spawnp, PyObject *module, path_t *path, PyObject *argv,
+               PyObject *env, PyObject *file_actions,
+               PyObject *setpgroup, int resetids, int setsid, PyObject *setsigmask,
+               PyObject *setsigdef, PyObject *scheduler)
 {
+    const char *func_name = use_posix_spawnp ? "posix_spawnp" : "posix_spawn";
     EXECV_CHAR **argvlist = NULL;
     EXECV_CHAR **envlist = NULL;
     posix_spawn_file_actions_t file_actions_buf;
@@ -5430,24 +5418,25 @@ os_posix_spawn_impl(PyObject *module, path_t *path, PyObject *argv,
     pid_t pid;
     int err_code;
 
-    /* posix_spawn has three arguments: (path, argv, env), where
+    /* posix_spawn and posix_spawnp have three arguments: (path, argv, env), where
        argv is a list or tuple of strings and env is a dictionary
        like posix.environ. */
 
     if (!PyList_Check(argv) && !PyTuple_Check(argv)) {
-        PyErr_SetString(PyExc_TypeError,
-                        "posix_spawn: argv must be a tuple or list");
+        PyErr_Format(PyExc_TypeError,
+                     "%s: argv must be a tuple or list", func_name);
         goto exit;
     }
     argc = PySequence_Size(argv);
     if (argc < 1) {
-        PyErr_SetString(PyExc_ValueError, "posix_spawn: argv must not be empty");
+        PyErr_Format(PyExc_ValueError,
+                     "%s: argv must not be empty", func_name);
         return NULL;
     }
 
     if (!PyMapping_Check(env)) {
-        PyErr_SetString(PyExc_TypeError,
-                        "posix_spawn: environment must be a mapping object");
+        PyErr_Format(PyExc_TypeError,
+                     "%s: environment must be a mapping object", func_name);
         goto exit;
     }
 
@@ -5456,8 +5445,8 @@ os_posix_spawn_impl(PyObject *module, path_t *path, PyObject *argv,
         goto exit;
     }
     if (!argvlist[0][0]) {
-        PyErr_SetString(PyExc_ValueError,
-            "posix_spawn: argv first element cannot be empty");
+        PyErr_Format(PyExc_ValueError,
+                     "%s: argv first element cannot be empty", func_name);
         goto exit;
     }
 
@@ -5485,16 +5474,26 @@ os_posix_spawn_impl(PyObject *module, path_t *path, PyObject *argv,
         file_actionsp = &file_actions_buf;
     }
 
-    if (parse_posix_spawn_flags(setpgroup, resetids, setsigmask,
-                                setsigdef, scheduler, &attr)) {
+    if (parse_posix_spawn_flags(func_name, setpgroup, resetids, setsid,
+                                setsigmask, setsigdef, scheduler, &attr)) {
         goto exit;
     }
     attrp = &attr;
 
     _Py_BEGIN_SUPPRESS_IPH
-    err_code = posix_spawn(&pid, path->narrow,
-                           file_actionsp, attrp, argvlist, envlist);
+#ifdef HAVE_POSIX_SPAWNP
+    if (use_posix_spawnp) {
+        err_code = posix_spawnp(&pid, path->narrow,
+                                file_actionsp, attrp, argvlist, envlist);
+    }
+    else
+#endif /* HAVE_POSIX_SPAWNP */
+    {
+        err_code = posix_spawn(&pid, path->narrow,
+                               file_actionsp, attrp, argvlist, envlist);
+    }
     _Py_END_SUPPRESS_IPH
+
     if (err_code) {
         errno = err_code;
         PyErr_SetFromErrnoWithFilenameObject(PyExc_OSError, path->object);
@@ -5521,7 +5520,96 @@ exit:
     Py_XDECREF(temp_buffer);
     return result;
 }
-#endif /* HAVE_POSIX_SPAWN */
+
+
+/*[clinic input]
+
+os.posix_spawn
+    path: path_t
+        Path of executable file.
+    argv: object
+        Tuple or list of strings.
+    env: object
+        Dictionary of strings mapping to strings.
+    /
+    *
+    file_actions: object(c_default='NULL') = ()
+        A sequence of file action tuples.
+    setpgroup: object = NULL
+        The pgroup to use with the POSIX_SPAWN_SETPGROUP flag.
+    resetids: bool(accept={int}) = False
+        If the value is `true` the POSIX_SPAWN_RESETIDS will be activated.
+    setsid: bool(accept={int}) = False
+        If the value is `true` the POSIX_SPAWN_SETSID or POSIX_SPAWN_SETSID_NP will be activated.
+    setsigmask: object(c_default='NULL') = ()
+        The sigmask to use with the POSIX_SPAWN_SETSIGMASK flag.
+    setsigdef: object(c_default='NULL') = ()
+        The sigmask to use with the POSIX_SPAWN_SETSIGDEF flag.
+    scheduler: object = NULL
+        A tuple with the scheduler policy (optional) and parameters.
+
+Execute the program specified by path in a new process.
+[clinic start generated code]*/
+
+static PyObject *
+os_posix_spawn_impl(PyObject *module, path_t *path, PyObject *argv,
+                    PyObject *env, PyObject *file_actions,
+                    PyObject *setpgroup, int resetids, int setsid,
+                    PyObject *setsigmask, PyObject *setsigdef,
+                    PyObject *scheduler)
+/*[clinic end generated code: output=14a1098c566bc675 input=8c6305619a00ad04]*/
+{
+    return py_posix_spawn(0, module, path, argv, env, file_actions,
+                          setpgroup, resetids, setsid, setsigmask, setsigdef,
+                          scheduler);
+}
+ #endif /* HAVE_POSIX_SPAWN */
+
+
+
+#ifdef HAVE_POSIX_SPAWNP
+/*[clinic input]
+
+os.posix_spawnp
+    path: path_t
+        Path of executable file.
+    argv: object
+        Tuple or list of strings.
+    env: object
+        Dictionary of strings mapping to strings.
+    /
+    *
+    file_actions: object(c_default='NULL') = ()
+        A sequence of file action tuples.
+    setpgroup: object = NULL
+        The pgroup to use with the POSIX_SPAWN_SETPGROUP flag.
+    resetids: bool(accept={int}) = False
+        If the value is `True` the POSIX_SPAWN_RESETIDS will be activated.
+    setsid: bool(accept={int}) = False
+        If the value is `True` the POSIX_SPAWN_SETSID or POSIX_SPAWN_SETSID_NP will be activated.
+    setsigmask: object(c_default='NULL') = ()
+        The sigmask to use with the POSIX_SPAWN_SETSIGMASK flag.
+    setsigdef: object(c_default='NULL') = ()
+        The sigmask to use with the POSIX_SPAWN_SETSIGDEF flag.
+    scheduler: object = NULL
+        A tuple with the scheduler policy (optional) and parameters.
+
+Execute the program specified by path in a new process.
+[clinic start generated code]*/
+
+static PyObject *
+os_posix_spawnp_impl(PyObject *module, path_t *path, PyObject *argv,
+                     PyObject *env, PyObject *file_actions,
+                     PyObject *setpgroup, int resetids, int setsid,
+                     PyObject *setsigmask, PyObject *setsigdef,
+                     PyObject *scheduler)
+/*[clinic end generated code: output=7b9aaefe3031238d input=c1911043a22028da]*/
+{
+    return py_posix_spawn(1, module, path, argv, env, file_actions,
+                          setpgroup, resetids, setsid, setsigmask, setsigdef,
+                          scheduler);
+}
+#endif /* HAVE_POSIX_SPAWNP */
 
 
 #if defined(HAVE_SPAWNV) || defined(HAVE_WSPAWNV)
@@ -7666,9 +7754,13 @@ check_CreateSymbolicLink(void)
     /* only recheck */
     if (Py_CreateSymbolicLinkW)
         return 1;
+
+    Py_BEGIN_ALLOW_THREADS
     hKernel32 = GetModuleHandleW(L"KERNEL32");
     *(FARPROC*)&Py_CreateSymbolicLinkW = GetProcAddress(hKernel32,
                                                         "CreateSymbolicLinkW");
+    Py_END_ALLOW_THREADS
+
     return Py_CreateSymbolicLinkW != NULL;
 }
 
@@ -11205,7 +11297,6 @@ check_ShellExecute()
            the system SHELL32.DLL, even if there is another SHELL32.DLL
            in the DLL search path. */
         hShell32 = LoadLibraryW(L"SHELL32");
-        Py_END_ALLOW_THREADS
         if (hShell32) {
             *(FARPROC*)&Py_ShellExecuteW = GetProcAddress(hShell32,
                                             "ShellExecuteW");
@@ -11213,6 +11304,7 @@ check_ShellExecute()
         } else {
             has_ShellExecute = 0;
         }
+        Py_END_ALLOW_THREADS
     }
     return has_ShellExecute;
 }
@@ -11826,11 +11918,12 @@ os_cpu_count_impl(PyObject *module)
     /* Vista is supported and the GetMaximumProcessorCount API is Win7+
        Need to fallback to Vista behavior if this call isn't present */
     HINSTANCE hKernel32;
-    hKernel32 = GetModuleHandleW(L"KERNEL32");
-
     static DWORD(CALLBACK *_GetMaximumProcessorCount)(WORD) = NULL;
+    Py_BEGIN_ALLOW_THREADS
+    hKernel32 = GetModuleHandleW(L"KERNEL32");
     *(FARPROC*)&_GetMaximumProcessorCount = GetProcAddress(hKernel32,
         "GetMaximumProcessorCount");
+    Py_END_ALLOW_THREADS
     if (_GetMaximumProcessorCount != NULL) {
         ncpu = _GetMaximumProcessorCount(ALL_PROCESSOR_GROUPS);
     }
@@ -13087,6 +13180,7 @@ static PyMethodDef posix_methods[] = {
     OS_GETPRIORITY_METHODDEF
     OS_SETPRIORITY_METHODDEF
     OS_POSIX_SPAWN_METHODDEF
+    OS_POSIX_SPAWNP_METHODDEF
     OS_READLINK_METHODDEF
     OS_RENAME_METHODDEF
     OS_REPLACE_METHODDEF
