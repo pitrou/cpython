@@ -1067,7 +1067,7 @@ is_implicit_gc_desired(void)
  * Threaded GC support.
  */
 
-#if 1
+#if 0
 #define GC_DEBUG_PRINTF(...) fprintf(stderr, __VA_ARGS__)
 #else
 #define GC_DEBUG_PRINTF(...)
@@ -1121,14 +1121,14 @@ schedule_gc_request(void)
 {
     assert(GC.is_threaded);
     if (!GC.thread.collection_requested) {
-//         GC_DEBUG_PRINTF("GC: schedule threaded collection\n");
+        GC_DEBUG_PRINTF("GC: schedule threaded collection\n");
         GC.thread.collection_requested = 1;
         PyThread_release_lock(GC.thread.wakeup);
         /* Release the GIL immediately to give a chance to the GC thread
          * (XXX is this too costly?)
          */
-//         Py_BEGIN_ALLOW_THREADS
-//         Py_END_ALLOW_THREADS
+        Py_BEGIN_ALLOW_THREADS
+        Py_END_ALLOW_THREADS
     }
 }
 
@@ -1149,19 +1149,19 @@ gc_thread_func(void *data)
     GC_DEBUG_PRINTF("GC: thread start\n");
 
     /* Create tailored DummyThread instance for this thread */
-//     threading_module = PyImport_ImportModule("threading");
-//     if (threading_module == NULL) {
-//         goto end;
-//     }
-//     func = PyObject_GetAttrString(threading_module, "_ensure_dummy_thread");
-//     if (func == NULL) {
-//         goto end;
-//     }
-//     thread_obj = PyObject_CallFunction(func, "s", "GC thread");
-//     Py_DECREF(func);
-//     if (thread_obj == NULL) {
-//         goto end;
-//     }
+    threading_module = PyImport_ImportModule("threading");
+    if (threading_module == NULL) {
+        goto end;
+    }
+    func = PyObject_GetAttrString(threading_module, "_ensure_dummy_thread");
+    if (func == NULL) {
+        goto end;
+    }
+    thread_obj = PyObject_CallFunction(func, "s", "GC thread");
+    Py_DECREF(func);
+    if (thread_obj == NULL) {
+        goto end;
+    }
 
     /* GC main loop */
     while (GC.is_threaded) {
@@ -1187,16 +1187,21 @@ gc_thread_func(void *data)
 end:
     GC_DEBUG_PRINTF("GC: thread end\n");
 
-//     if (thread_obj != NULL) {
-//         func = PyObject_GetAttrString(threading_module, "_remove_dummy_thread");
-//         if (func != NULL) {
-//             PyObject *res = PyObject_CallFunction(func, "O", thread_obj);
-//             Py_DECREF(func);
-//             Py_XDECREF(res);
-//         }
-//         Py_DECREF(threading_module);
-//         Py_DECREF(thread_obj);
-//     }
+    if (PyErr_Occurred()) {
+        PySys_WriteStderr("Unhandled exception in GC thread\n");
+        PyErr_WriteUnraisable(NULL);
+    }
+
+    if (thread_obj != NULL) {
+        func = PyObject_GetAttrString(threading_module, "_remove_dummy_thread");
+        if (func != NULL) {
+            PyObject *res = PyObject_CallFunction(func, "O", thread_obj);
+            Py_DECREF(func);
+            Py_XDECREF(res);
+        }
+        Py_DECREF(threading_module);
+        Py_DECREF(thread_obj);
+    }
 
     if (PyErr_Occurred()) {
         PySys_WriteStderr("Unhandled exception in GC thread\n");
@@ -1246,11 +1251,11 @@ _PyGC_SetThreaded(int is_threaded)
             /* bpo-31517: Make sure the first import of the threading
              * module happens in the main thread (not the GC thread).
              */
-//             threading_module = PyImport_ImportModule("threading");
-//             if (threading_module == NULL) {
-//                 goto error;
-//             }
-//             Py_DECREF(threading_module);
+            threading_module = PyImport_ImportModule("threading");
+            if (threading_module == NULL) {
+                goto error;
+            }
+            Py_DECREF(threading_module);
 
             /* Preallocate thread state (see _threadmodule.c). */
             tstate = _PyThreadState_Prealloc(me->interp);
@@ -1308,8 +1313,6 @@ _PyGC_EnterShutdown(void)
     assert(GC.mutex.owner == NULL);
 }
 
-// static int before_fork_is_threaded;
-
 void
 _PyGC_BeforeFork(void)
 {
@@ -1331,7 +1334,6 @@ _PyGC_AfterFork_Parent(void)
 void
 _PyGC_AfterFork_Child(void)
 {
-    PyThreadState *me = PyThreadState_GET();
     GC.mutex.lock = PyThread_allocate_lock();
     GC.mutex.owner = NULL;
     GC.thread.wakeup = PyThread_allocate_lock();
