@@ -1074,7 +1074,7 @@ class Thread:
     def ident(self):
         """Thread identifier of this thread or None if it has not been started.
 
-        This is a nonzero integer. See the thread.get_ident() function. Thread
+        This is a nonzero integer. See the get_ident() function. Thread
         identifiers may be recycled when a thread exits and another thread is
         created. The identifier is available even after the thread has exited.
 
@@ -1163,8 +1163,8 @@ class Timer(Thread):
             self.function(*self.args, **self.kwargs)
         self.finished.set()
 
+
 # Special thread class to represent the main thread
-# This is garbage collected through an exit handler
 
 class _MainThread(Thread):
 
@@ -1294,7 +1294,7 @@ def _shutdown():
         #print("[threading._shutdown %d] joined %s" % (_os.getpid(), t,))
         t = _pickSomeNonDaemonThread()
     #print("[threading._shutdown %d] ok" % (_os.getpid(), ))
-    _main_thread._delete()
+    #_main_thread._delete()
 
 def _pickSomeNonDaemonThread():
     for t in enumerate():

@@ -56,9 +56,11 @@ class ThreadSignals(unittest.TestCase):
         # wait for it return.
         if signal_blackboard[signal.SIGUSR1]['tripped'] == 0 \
            or signal_blackboard[signal.SIGUSR2]['tripped'] == 0:
-            signal.alarm(1)
-            signal.pause()
-            signal.alarm(0)
+            try:
+                signal.alarm(1)
+                signal.pause()
+            finally:
+                signal.alarm(0)
 
         self.assertEqual( signal_blackboard[signal.SIGUSR1]['tripped'], 1)
         self.assertEqual( signal_blackboard[signal.SIGUSR1]['tripped_by'],
@@ -76,6 +78,10 @@ class ThreadSignals(unittest.TestCase):
 
     @unittest.skipIf(USING_PTHREAD_COND,
                      'POSIX condition variables cannot be interrupted')
+    @unittest.skipIf(sys.platform.startswith('linux') and
+                     not sys.thread_info.version,
+                     'Issue 34004: musl does not allow interruption of locks '
+                     'by signals.')
     # Issue #20564: sem_timedwait() cannot be interrupted on OpenBSD
     @unittest.skipIf(sys.platform.startswith('openbsd'),
                      'lock cannot be interrupted on OpenBSD')
@@ -89,19 +95,24 @@ class ThreadSignals(unittest.TestCase):
             lock = thread.allocate_lock()
             lock.acquire()
             signal.alarm(1)
-            t1 = time.time()
+            t1 = time.monotonic()
             self.assertRaises(KeyboardInterrupt, lock.acquire, timeout=5)
-            dt = time.time() - t1
+            dt = time.monotonic() - t1
             # Checking that KeyboardInterrupt was raised is not sufficient.
             # We want to assert that lock.acquire() was interrupted because
             # of the signal, not that the signal handler was called immediately
             # after timeout return of lock.acquire() (which can fool assertRaises).
             self.assertLess(dt, 3.0)
         finally:
+            signal.alarm(0)
             signal.signal(signal.SIGALRM, oldalrm)
 
     @unittest.skipIf(USING_PTHREAD_COND,
                      'POSIX condition variables cannot be interrupted')
+    @unittest.skipIf(sys.platform.startswith('linux') and
+                     not sys.thread_info.version,
+                     'Issue 34004: musl does not allow interruption of locks '
+                     'by signals.')
     # Issue #20564: sem_timedwait() cannot be interrupted on OpenBSD
     @unittest.skipIf(sys.platform.startswith('openbsd'),
                      'lock cannot be interrupted on OpenBSD')
@@ -125,12 +136,13 @@ class ThreadSignals(unittest.TestCase):
                     rlock.release()
                     time.sleep(0.01)
                 signal.alarm(1)
-                t1 = time.time()
+                t1 = time.monotonic()
                 self.assertRaises(KeyboardInterrupt, rlock.acquire, timeout=5)
-                dt = time.time() - t1
+                dt = time.monotonic() - t1
                 # See rationale above in test_lock_acquire_interruption
                 self.assertLess(dt, 3.0)
         finally:
+            signal.alarm(0)
             signal.signal(signal.SIGALRM, oldalrm)
 
     def acquire_retries_on_intr(self, lock):
@@ -191,9 +203,9 @@ class ThreadSignals(unittest.TestCase):
         old_handler = signal.signal(signal.SIGUSR1, my_handler)
         try:
             def timed_acquire():
-                self.start = time.time()
+                self.start = time.monotonic()
                 lock.acquire(timeout=0.5)
-                self.end = time.time()
+                self.end = time.monotonic()
             def send_signals():
                 for _ in range(40):
                     time.sleep(0.02)
