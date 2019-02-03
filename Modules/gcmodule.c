@@ -32,6 +32,11 @@
 #include "pydtrace.h"
 #include "pytime.h"             /* for _PyTime_GetMonotonicClock() */
 
+#include <signal.h>
+#if defined(HAVE_PTHREAD_SIGMASK) && !defined(HAVE_BROKEN_PTHREAD_SIGMASK)
+#  include <pthread.h>
+#endif
+
 /*[clinic input]
 module gc
 [clinic start generated code]*/
@@ -1330,6 +1335,14 @@ gc_thread_func(void *data)
     PyThreadState *tstate = (PyThreadState *) data;
     int res;
     PyObject *threading_module = NULL, *thread_obj = NULL, *func;
+
+#if defined(HAVE_PTHREAD_SIGMASK) && !defined(HAVE_BROKEN_PTHREAD_SIGMASK)
+    sigset_t set;
+
+    /* we don't want to receive any signal */
+    sigfillset(&set);
+    pthread_sigmask(SIG_SETMASK, &set, NULL);
+#endif
 
     assert(tstate != NULL);
     /* XXX copied from _threadmodule.c, factor it out? */
