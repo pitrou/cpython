@@ -160,6 +160,7 @@ struct _gc_runtime_state {
     Py_ssize_t long_lived_pending;
     /* Support for threaded collection (PEP 556) */
     int is_threaded;
+    int is_threaded_after_fork;
     struct gc_mutex mutex;
     struct gc_thread thread;
 };

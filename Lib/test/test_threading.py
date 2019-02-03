@@ -509,7 +509,8 @@ class ThreadTests(BaseTestCase):
                 main = threading.main_thread()
                 print(main.name)
                 print(main.ident == threading.current_thread().ident)
-                print(main.ident == threading.get_ident())
+                print(main.ident == threading.get_ident(), flush=True)
+                os._exit(0)
             else:
                 os.waitpid(pid, 0)
         """
@@ -535,6 +536,7 @@ class ThreadTests(BaseTestCase):
                     # stdout is fully buffered because not a tty,
                     # we have to flush before exit.
                     sys.stdout.flush()
+                    os._exit(0)
                 else:
                     os.waitpid(pid, 0)
 
@@ -765,6 +767,7 @@ class ThreadJoinOnShutdown(BaseTestCase):
                 print('end of main')
                 t.start()
                 t.join() # Should not block: main_thread is already stopped
+                os._exit(0)
 
             w = threading.Thread(target=worker)
             w.start()

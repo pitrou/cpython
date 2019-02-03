@@ -746,6 +746,7 @@ class Thread:
     """
 
     _initialized = False
+    _pid = None
     # Need to store a reference to sys.exc_info for printing
     # out exceptions when a thread tries to use a global var. during interp.
     # shutdown and thus raises an exception about trying to perform some
@@ -849,6 +850,7 @@ class Thread:
             with _active_limbo_lock:
                 del _limbo[self]
             raise
+        self._set_pid()
         self._started.wait()
 
     def run(self):
@@ -890,6 +892,9 @@ class Thread:
 
     def _set_ident(self):
         self._ident = get_ident()
+
+    def _set_pid(self):
+        self._pid = _os.getpid()
 
     def _set_tstate_lock(self):
         """
@@ -1181,6 +1186,7 @@ class _MainThread(Thread):
         self._set_tstate_lock()
         self._started.set()
         self._set_ident()
+        self._set_pid()
         with _active_limbo_lock:
             _active[self._ident] = self
 
@@ -1200,6 +1206,7 @@ class _DummyThread(Thread):
 
         self._started.set()
         self._set_ident()
+        self._set_pid()
         with _active_limbo_lock:
             _active[self._ident] = self
 
@@ -1217,7 +1224,7 @@ class _DummyThread(Thread):
 # Internal API for background threads created by the interpreter
 
 def _ensure_dummy_thread(name):
-    assert get_ident() not in _active, (get_ident(), _active)
+    assert get_ident() not in _active
     assert isinstance(name, str)
     return _DummyThread(name)
 
@@ -1296,8 +1303,9 @@ def _shutdown():
     t = _pickSomeNonDaemonThread()
     while t:
         #print("[threading._shutdown %d] picked %s" % (_os.getpid(), t,))
-        while t.is_alive():
-            t.join(timeout=1)
+        t.join()
+        #while t.is_alive():
+            #t.join(timeout=1)
             #print("... [threading._shutdown %d] still trying to join %s" % (_os.getpid(), t,))
         #print("[threading._shutdown %d] joined %s" % (_os.getpid(), t,))
         t = _pickSomeNonDaemonThread()

@@ -1433,8 +1433,6 @@ _PyGC_SetThreaded(int is_threaded)
     /*
      * Problems with importing threading:
      * - bpo-31517
-     * - the threading state needs sanitizing after fork, but comes
-     *   after the _PyGC_AfterFork_Child() -- i.e. when it's too late
      */
 
     if (reentrant++) {
@@ -1521,6 +1519,7 @@ _PyGC_EnterShutdown(void)
 void
 _PyGC_BeforeFork(void)
 {
+    GC_DEBUG_PRINTF("GC: _PyGC_BeforeFork\n");
     PyThreadState *me = PyThreadState_GET();
     if (GC_MUTEX_IS_RECURSIVE(me)) {
         Py_FatalError("fork() called from within GC");
@@ -1532,24 +1531,37 @@ _PyGC_BeforeFork(void)
 void
 _PyGC_AfterFork_Parent(void)
 {
+    GC_DEBUG_PRINTF("GC: _PyGC_AfterFork_Parent\n");
     PyThreadState *me = PyThreadState_GET();
     GC_MUTEX_RELEASE(me);
 }
 
 void
-_PyGC_AfterFork_Child(void)
+_PyGC_AfterFork_Child_Primary(void)
 {
+    GC_DEBUG_PRINTF("GC: _PyGC_AfterFork_Child_Primary\n");
     GC.mutex.lock = PyThread_allocate_lock();
     GC.mutex.owner = NULL;
     GC.thread.wakeup = PyThread_allocate_lock();
     GC.thread.done = PyThread_allocate_lock();
-    if (GC.is_threaded) {
-        /* Restart thread */
-        GC.is_threaded = 0;
-        _PyGC_SetThreaded(1);
-    }
+    /* Restart thread later, as the threading module's internal state
+     * hasn't been reinitialized yet.
+     */
+    GC.is_threaded_after_fork = GC.is_threaded;
+    GC.is_threaded = 0;
 }
 
+void
+_PyGC_AfterFork_Child_Secondary(void)
+{
+    GC_DEBUG_PRINTF("GC: _PyGC_AfterFork_Child_Secondary\n");
+    if (GC.is_threaded_after_fork) {
+        GC.is_threaded_after_fork = 0;
+        if (_PyGC_SetThreaded(1)) {
+            Py_FatalError("could not restart GC thread after fork");
+        }
+    }
+}
 
 #include "clinic/gcmodule.c.h"
 

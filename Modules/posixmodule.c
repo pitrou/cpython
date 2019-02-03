@@ -431,9 +431,13 @@ PyOS_AfterFork_Child(void)
     PyEval_ReInitThreads();
     _PyImport_ReInitLock();
     _PySignal_AfterFork();
-    _PyGC_AfterFork_Child();
+    _PyGC_AfterFork_Child_Primary();
 
     run_at_forkers(_PyInterpreterState_Get()->after_forkers_child, 0);
+    /* This part of the GC's after-fork handler needs to be run after
+     * the threading module's after-fork handler.
+     */
+    _PyGC_AfterFork_Child_Secondary();
 }
 
 static int

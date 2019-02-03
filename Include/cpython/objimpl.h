@@ -39,7 +39,8 @@ PyAPI_FUNC(Py_ssize_t) _PyGC_CollectIfEnabled(void);
 PyAPI_FUNC(int) _PyGC_SetThreaded(int);
 PyAPI_FUNC(void) _PyGC_BeforeFork(void);
 PyAPI_FUNC(void) _PyGC_AfterFork_Parent(void);
-PyAPI_FUNC(void) _PyGC_AfterFork_Child(void);
+PyAPI_FUNC(void) _PyGC_AfterFork_Child_Primary(void);
+PyAPI_FUNC(void) _PyGC_AfterFork_Child_Secondary(void);
 
 /* Test if an object has a GC head */
 #define PyObject_IS_GC(o) \
