@@ -2101,25 +2101,25 @@ wait_for_thread_shutdown(void)
 {
     _Py_IDENTIFIER(_shutdown);
     PyObject *result;
-//     fprintf(stderr, "wait_for_thread_shutdown 1\n");
+//     fprintf(stderr, "[%d] wait_for_thread_shutdown 1\n", getpid());
     PyObject *threading = _PyImport_GetModuleId(&PyId_threading);
     if (threading == NULL) {
         /* threading not imported */
         PyErr_Clear();
         return;
     }
-//     fprintf(stderr, "wait_for_thread_shutdown 2\n");
+//     fprintf(stderr, "[%d] wait_for_thread_shutdown 2\n", getpid());
     result = _PyObject_CallMethodId(threading, &PyId__shutdown, NULL);
     if (result == NULL) {
-//         fprintf(stderr, "wait_for_thread_shutdown 3a\n");
+//         fprintf(stderr, "[%d] wait_for_thread_shutdown 3a\n", getpid());
         PyErr_WriteUnraisable(threading);
     }
     else {
-//         fprintf(stderr, "wait_for_thread_shutdown 3b\n");
+//         fprintf(stderr, "[%d] wait_for_thread_shutdown 3b\n", getpid());
         Py_DECREF(result);
     }
     Py_DECREF(threading);
-//     fprintf(stderr, "wait_for_thread_shutdown 4\n");
+//     fprintf(stderr, "[%d] wait_for_thread_shutdown 4\n", getpid());
 }
 
 #define NEXITFUNCS 32

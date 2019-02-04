@@ -767,7 +767,6 @@ class ThreadJoinOnShutdown(BaseTestCase):
                 print('end of main')
                 t.start()
                 t.join() # Should not block: main_thread is already stopped
-                os._exit(0)
 
             w = threading.Thread(target=worker)
             w.start()

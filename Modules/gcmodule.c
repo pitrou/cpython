@@ -1333,7 +1333,6 @@ static void
 gc_thread_func(void *data)
 {
     PyThreadState *tstate = (PyThreadState *) data;
-    int res;
     PyObject *threading_module = NULL, *thread_obj = NULL, *func;
 
 #if defined(HAVE_PTHREAD_SIGMASK) && !defined(HAVE_BROKEN_PTHREAD_SIGMASK)
@@ -1351,7 +1350,7 @@ gc_thread_func(void *data)
     PyEval_AcquireThread(tstate);
     tstate->interp->num_threads++;
 
-    GC_DEBUG_PRINTF("GC: thread start\n");
+    GC_DEBUG_PRINTF("[%d] GC: thread start\n", getpid());
 
     /* Create tailored DummyThread instance for this thread */
     threading_module = PyImport_ImportModule("threading");
@@ -1371,12 +1370,23 @@ gc_thread_func(void *data)
     /* GC main loop */
     while (GC.is_threaded) {
         /* Wait for wakeup */
+        PyLockStatus res;
+
         Py_BEGIN_ALLOW_THREADS
         res = PyThread_acquire_lock(GC.thread.wakeup, /* waitflag */ 1);
         Py_END_ALLOW_THREADS
+
         assert(res == PY_LOCK_ACQUIRED);
 
-        GC_DEBUG_PRINTF("GC: thread wakeup %d %d\n",
+        /* Find out whether there are still other Python threads running. */
+        if (tstate->prev == NULL && tstate->next == NULL) {
+            /* We are the last Python thread standing, bail out */
+            GC_DEBUG_PRINTF("[%d] GC: thread emergency exit\n", getpid());
+            GC.is_threaded = 0;
+            goto raw_exit;
+        }
+
+        GC_DEBUG_PRINTF("[%d] GC: thread wakeup %d %d\n", getpid(),
                         GC.thread.collection_requested, is_implicit_gc_desired());
         if (GC.thread.collection_requested) {
             if (is_implicit_gc_desired()) {
@@ -1413,6 +1423,7 @@ end:
         PyErr_WriteUnraisable(NULL);
     }
 
+raw_exit:
     /* Signal we're exiting */
     PyThread_release_lock(GC.thread.done);
 
@@ -1421,6 +1432,14 @@ end:
     PyThreadState_Clear(tstate);
     PyThreadState_DeleteCurrent();
     PyThread_exit_thread();
+}
+
+void
+_PyGC_WakeUpThread(void)
+{
+    if (GC.is_threaded) {
+        PyThread_release_lock(GC.thread.wakeup);
+    }
 }
 
 int
@@ -1507,7 +1526,7 @@ end:
 void
 _PyGC_EnterShutdown(void)
 {
-    GC_DEBUG_PRINTF("GC: _PyGC_EnterShutdown\n");
+    GC_DEBUG_PRINTF("[%d] GC: _PyGC_EnterShutdown\n", getpid());
     if (_PyGC_SetThreaded(0)) {
         Py_FatalError("should not have failed setting GC mode to serial");
     }

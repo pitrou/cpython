@@ -684,6 +684,12 @@ tstate_delete_common(PyThreadState *tstate)
         tstate->on_delete(tstate->on_delete_data);
     }
     PyMem_RawFree(tstate);
+    /* Tentatively wake up a running GC thread, in case no other Python
+     * threads are remaining.  This may happen e.g. if this process was forked
+     * from a non-main thread in the parent process, in which case no Python
+     * finalization will ever occur in the child.
+     */
+    _PyGC_WakeUpThread();
 }
 
 
